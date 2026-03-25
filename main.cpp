@@ -8,6 +8,13 @@
 #include <vector>
 
 class ThreadPool {
+private:
+    std::vector<std::thread> workers_;
+    std::queue<std::function<void()>> tasks_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool stop_;
+    
 public:
     explicit ThreadPool(size_t thread_count = std::thread::hardware_concurrency())
         : stop_(false) {
@@ -63,17 +70,23 @@ public:
         cv_.notify_one();
     }
 
-private:
-    std::vector<std::thread> workers_;
-    std::queue<std::function<void()>> tasks_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    bool stop_;
+
 };
 
 class TaskGraph {
-public:
     using TaskId = size_t;
+private:
+    struct TaskNode {
+        std::function<void()> func;
+        std::vector<TaskId> next;
+        int dependency_count;
+    };
+
+    std::vector<TaskNode> tasks_;
+
+    friend class GraphExecutor;
+public:
+
 
     TaskId add_task(std::function<void()> func) {
         tasks_.push_back(TaskNode{std::move(func), {}, 0});
@@ -89,19 +102,13 @@ public:
         return tasks_.size();
     }
 
-private:
-    struct TaskNode {
-        std::function<void()> func;
-        std::vector<TaskId> next;
-        int dependency_count;
-    };
 
-    std::vector<TaskNode> tasks_;
-
-    friend class GraphExecutor;
 };
 
 class GraphExecutor {
+private:
+    ThreadPool pool_;
+    
 public:
     explicit GraphExecutor(size_t thread_count = std::thread::hardware_concurrency())
         : pool_(thread_count) {}
@@ -151,8 +158,7 @@ public:
         });
     }
 
-private:
-    ThreadPool pool_;
+
 };
 
 int main() {
