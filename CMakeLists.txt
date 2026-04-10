@@ -31,6 +31,10 @@ add_executable(example_root_fail
     examples/root_fail_example.cpp
 )
 
+add_executable(example_serialization
+    examples/serialization_example.cpp
+)
+
 target_link_libraries(example_basic
     PRIVATE
         parallel_tools
@@ -42,6 +46,11 @@ target_link_libraries(example_failure
 )
 
 target_link_libraries(example_root_fail
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_serialization
     PRIVATE
         parallel_tools
 )
