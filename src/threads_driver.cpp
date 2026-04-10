@@ -112,42 +112,128 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
         throw std::runtime_error("ThreadsDriver: task graph contains a cycle");
     }
 
+    enum class TaskState {
+        Pending,
+        Queued,
+        Running,
+        Finished,
+        Failed,
+        Skipped
+    };
+
     std::vector<std::atomic<int>> remaining_deps(graph.size());
     for (std::size_t i = 0; i < graph.size(); ++i) {
         remaining_deps[i].store(static_cast<int>(graph.task(i).prev.size()));
     }
 
-    std::atomic<std::size_t> completed{0};
+    std::vector<std::atomic<TaskState>> states(graph.size());
+    for (auto& state : states) {
+        state.store(TaskState::Pending);
+    }
+
+    std::atomic<std::size_t> settled{0};
+    std::atomic<bool> failed{false};
+
     std::mutex done_mutex;
     std::condition_variable done_cv;
 
     std::mutex error_mutex;
     std::exception_ptr first_exception = nullptr;
 
+    auto mark_settled = [&]() {
+        const std::size_t value = settled.fetch_add(1) + 1;
+        if (value == graph.size()) {
+            std::lock_guard<std::mutex> lock(done_mutex);
+            done_cv.notify_one();
+        }
+    };
+
+    std::function<void(TaskGraph::TaskId)> cancel_subtree;
     std::function<void(TaskGraph::TaskId)> schedule_task;
 
+    cancel_subtree = [&](TaskGraph::TaskId id) {
+        for (auto nxt : graph.task(id).next) {
+            TaskState current = states[nxt].load();
+
+            while (true) {
+                if (current == TaskState::Pending || current == TaskState::Queued) {
+                    if (states[nxt].compare_exchange_weak(current, TaskState::Skipped)) {
+                        mark_settled();
+                        cancel_subtree(nxt);
+                        break;
+                    }
+                    continue;
+                }
+
+                // Уже в работе или уже завершена/пропущена/упала
+                break;
+            }
+        }
+    };
+
     schedule_task = [&](TaskGraph::TaskId id) {
-        pool_.submit([&, id]() {
-            try {
-                graph.task(id).func(context);
-            } catch (...) {
+        TaskState expected = TaskState::Pending;
+        if (!states[id].compare_exchange_strong(expected, TaskState::Queued)) {
+            return;
+        }
+
+        try {
+            pool_.submit([&, id]() {
+                TaskState expected_state = TaskState::Queued;
+
+                // Если граф уже сломан до старта этой задачи
+                if (failed.load()) {
+                    if (states[id].compare_exchange_strong(expected_state, TaskState::Skipped)) {
+                        mark_settled();
+                    }
+                    return;
+                }
+
+                if (!states[id].compare_exchange_strong(expected_state, TaskState::Running)) {
+                    return;
+                }
+
+                try {
+                    graph.task(id).func(context);
+                    states[id].store(TaskState::Finished);
+
+                    if (!failed.load()) {
+                        for (auto nxt : graph.task(id).next) {
+                            if (--remaining_deps[nxt] == 0) {
+                                schedule_task(nxt);
+                            }
+                        }
+                    }
+                } catch (...) {
+                    states[id].store(TaskState::Failed);
+                    failed.store(true);
+
+                    {
+                        std::lock_guard<std::mutex> lock(error_mutex);
+                        if (!first_exception) {
+                            first_exception = std::current_exception();
+                        }
+                    }
+
+                    cancel_subtree(id);
+                }
+
+                mark_settled();
+            });
+        } catch (...) {
+            states[id].store(TaskState::Failed);
+            failed.store(true);
+
+            {
                 std::lock_guard<std::mutex> lock(error_mutex);
                 if (!first_exception) {
                     first_exception = std::current_exception();
                 }
             }
 
-            for (auto nxt : graph.task(id).next) {
-                if (--remaining_deps[nxt] == 0) {
-                    schedule_task(nxt);
-                }
-            }
-
-            if (++completed == graph.size()) {
-                std::lock_guard<std::mutex> lock(done_mutex);
-                done_cv.notify_one();
-            }
-        });
+            cancel_subtree(id);
+            mark_settled();
+        }
     };
 
     for (std::size_t i = 0; i < graph.size(); ++i) {
@@ -159,7 +245,7 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
     {
         std::unique_lock<std::mutex> lock(done_mutex);
         done_cv.wait(lock, [&]() {
-            return completed == graph.size();
+            return settled.load() == graph.size();
         });
     }
 

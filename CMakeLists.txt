@@ -23,7 +23,25 @@ add_executable(example_basic
     examples/basic_example.cpp
 )
 
+add_executable(example_failure
+    examples/failure_example.cpp
+)
+
+add_executable(example_root_fail
+    examples/root_fail_example.cpp
+)
+
 target_link_libraries(example_basic
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_failure
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_root_fail
     PRIVATE
         parallel_tools
 )
