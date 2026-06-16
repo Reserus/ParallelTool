@@ -46,6 +46,14 @@ add_executable(example_mpi_transport
     examples/mpi_value_transport_example.cpp
 )
 
+add_executable(example_benchmark
+    examples/benchmark_overhead.cpp
+)
+
+add_executable(example_benchmark_table
+    examples/benchmark_table.cpp
+)
+
 target_link_libraries(example_basic
     PRIVATE
         parallel_tools
@@ -67,6 +75,16 @@ target_link_libraries(example_serialization
 )
 
 target_link_libraries(example_mpi_transport
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_benchmark
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_benchmark_table
     PRIVATE
         parallel_tools
 )
