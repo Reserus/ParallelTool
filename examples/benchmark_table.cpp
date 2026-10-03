@@ -5,33 +5,68 @@
 #include <chrono>
 #include <cmath>
 #include <iomanip>
+#include <stdexcept>
+#include <sstream>
+#include <utility>
 #include <iostream>
 #include <numeric>
 #include <string>
 #include <thread>
 #include <vector>
 
-using Clock = std::chrono::high_resolution_clock;
+using Clock = std::chrono::steady_clock;
+
+struct TimingStats {
+    double mean_ms = 0.0;
+    double median_ms = 0.0;
+    double stddev_ms = 0.0;
+};
 
 struct BenchmarkResult {
-    double manual_ms = 0.0;
-    double framework_ms = 0.0;
+    TimingStats manual;
+    TimingStats framework;
     double manual_value = 0.0;
     double framework_value = 0.0;
 };
 
 template <class Func>
-double measure_average_ms(Func&& func, int repeats) {
-    double total_ms = 0.0;
+TimingStats measure_stats(Func&& func, int warmup_repeats, int measured_repeats) {
+    if (measured_repeats <= 0) {
+        throw std::invalid_argument("measured_repeats must be positive");
+    }
 
-    for (int i = 0; i < repeats; ++i) {
+    for (int i = 0; i < warmup_repeats; ++i) {
+        func();
+    }
+
+    std::vector<double> samples;
+    samples.reserve(static_cast<std::size_t>(measured_repeats));
+
+    for (int i = 0; i < measured_repeats; ++i) {
         const auto start = Clock::now();
         func();
         const auto end = Clock::now();
-        total_ms += std::chrono::duration<double, std::milli>(end - start).count();
+        samples.push_back(std::chrono::duration<double, std::milli>(
+            end - start).count());
     }
 
-    return total_ms / static_cast<double>(repeats);
+    const double mean = std::accumulate(samples.begin(), samples.end(), 0.0) /
+                        static_cast<double>(samples.size());
+
+    std::sort(samples.begin(), samples.end());
+    const std::size_t middle = samples.size() / 2;
+    const double median = (samples.size() % 2 == 0)
+        ? (samples[middle - 1] + samples[middle]) / 2.0
+        : samples[middle];
+
+    double variance = 0.0;
+    for (double sample : samples) {
+        const double diff = sample - mean;
+        variance += diff * diff;
+    }
+    variance /= static_cast<double>(samples.size());
+
+    return {mean, median, std::sqrt(variance)};
 }
 
 std::vector<double> make_data(std::size_t n) {
@@ -97,11 +132,12 @@ double framework_parallel_sum(const std::vector<double>& data, std::size_t parts
             {"numbers"},
             {out_key},
             [begin, end, out_key](TaskContext& ctx) {
-                const auto numbers = ctx.get_copy<std::vector<double>>("numbers");
+                const auto numbers =
+                    ctx.get_shared<std::vector<double>>("numbers");
 
                 double sum = 0.0;
                 for (std::size_t i = begin; i < end; ++i) {
-                    sum += numbers[i];
+                    sum += (*numbers)[i];
                 }
 
                 ctx.set(out_key, sum);
@@ -198,9 +234,10 @@ double framework_pipeline(const std::vector<double>& data, int stages) {
         {"result"},
         [stages](TaskContext& ctx) {
             const auto values =
-                ctx.get_copy<std::vector<double>>("stage_" + std::to_string(stages));
+                ctx.get_shared<std::vector<double>>("stage_" + std::to_string(stages));
 
-            const double sum = std::accumulate(values.begin(), values.end(), 0.0);
+            const double sum =
+                std::accumulate(values->begin(), values->end(), 0.0);
             ctx.set("result", sum);
         }
     );
@@ -216,67 +253,97 @@ double framework_pipeline(const std::vector<double>& data, int stages) {
     return context.get_copy<double>("result");
 }
 
-BenchmarkResult run_low_exchange_benchmark(std::size_t n, std::size_t parts, int repeats) {
+BenchmarkResult run_low_exchange_benchmark(std::size_t n, std::size_t parts, int warmup_repeats, int measured_repeats) {
     const auto data = make_data(n);
 
     BenchmarkResult result;
 
-    result.manual_ms = measure_average_ms([&]() {
+    result.manual = measure_stats([&]() {
         result.manual_value = manual_parallel_sum(data, parts);
-    }, repeats);
+    }, warmup_repeats, measured_repeats);
 
-    result.framework_ms = measure_average_ms([&]() {
+    result.framework = measure_stats([&]() {
         result.framework_value = framework_parallel_sum(data, parts);
-    }, repeats);
+    }, warmup_repeats, measured_repeats);
 
     return result;
 }
 
-BenchmarkResult run_high_exchange_benchmark(std::size_t n, int stages, int repeats) {
+BenchmarkResult run_high_exchange_benchmark(std::size_t n, int stages, int warmup_repeats, int measured_repeats) {
     const auto data = make_data(n);
 
     BenchmarkResult result;
 
-    result.manual_ms = measure_average_ms([&]() {
+    result.manual = measure_stats([&]() {
         result.manual_value = manual_pipeline(data, stages);
-    }, repeats);
+    }, warmup_repeats, measured_repeats);
 
-    result.framework_ms = measure_average_ms([&]() {
+    result.framework = measure_stats([&]() {
         result.framework_value = framework_pipeline(data, stages);
-    }, repeats);
+    }, warmup_repeats, measured_repeats);
 
     return result;
 }
 
 void print_table_header(const std::string& title) {
-    std::cout << "\n=== " << title << " ===\n";
+    std::cout << "\n" << title << "\n";
+    std::cout << std::string(104, '-') << "\n";
     std::cout
         << std::left
         << std::setw(12) << "N"
-        << std::setw(14) << "Manual(ms)"
-        << std::setw(16) << "Framework(ms)"
-        << std::setw(14) << "Overhead(ms)"
+        << std::setw(24) << "Manual ms (med +/- sd)"
+        << std::setw(24) << "Framework ms (med +/- sd)"
+        << std::setw(16) << "Overhead ms"
         << std::setw(12) << "Slowdown"
-        << std::setw(14) << "Diff"
+        << std::setw(10) << "Diff"
         << "\n";
-
-    std::cout << std::string(82, '-') << "\n";
+    std::cout << std::string(104, '-') << "\n";
 }
 
 void print_table_row(std::size_t n, const BenchmarkResult& r) {
-    const double overhead_ms = r.framework_ms - r.manual_ms;
-    const double slowdown = r.framework_ms / r.manual_ms;
+    const double overhead_ms = r.framework.median_ms - r.manual.median_ms;
+    const double slowdown = r.framework.median_ms / r.manual.median_ms;
     const double diff = std::abs(r.framework_value - r.manual_value);
+
+    std::ostringstream manual_stats;
+    manual_stats << std::fixed << std::setprecision(3)
+                 << r.manual.median_ms << " +/- " << r.manual.stddev_ms;
+
+    std::ostringstream framework_stats;
+    framework_stats << std::fixed << std::setprecision(3)
+                    << r.framework.median_ms << " +/- " << r.framework.stddev_ms;
 
     std::cout
         << std::left
         << std::setw(12) << n
-        << std::setw(14) << r.manual_ms
-        << std::setw(16) << r.framework_ms
-        << std::setw(14) << overhead_ms
+        << std::setw(23) << manual_stats.str()
+        << std::setw(23) << framework_stats.str()
+        << std::setw(15) << overhead_ms
         << std::setw(12) << slowdown
-        << std::setw(14) << diff
+        << std::setw(10) << diff
         << "\n";
+}
+
+void print_mean_summary(
+    const std::string& label,
+    const std::vector<std::pair<std::size_t, BenchmarkResult>>& results
+) {
+    std::cout << "\n" << label << " — arithmetic mean (ms)\n";
+    std::cout << std::string(54, '-') << "\n";
+    std::cout << std::left
+              << std::setw(12) << "N"
+              << std::setw(20) << "Manual mean"
+              << std::setw(22) << "Framework mean"
+              << "\n";
+    std::cout << std::string(54, '-') << "\n";
+
+    for (const auto& [n, result] : results) {
+        std::cout << std::left
+                  << std::setw(12) << n
+                  << std::setw(20) << result.manual.mean_ms
+                  << std::setw(22) << result.framework.mean_ms
+                  << "\n";
+    }
 }
 
 int main() {
@@ -285,7 +352,8 @@ int main() {
     const std::size_t thread_count =
         std::max<std::size_t>(1, std::thread::hardware_concurrency());
 
-    const int repeats = 5;
+    const int warmup_repeats = 3;
+    const int measured_repeats = 21;
 
     const std::vector<std::size_t> low_exchange_sizes = {
         100'000,
@@ -303,22 +371,31 @@ int main() {
         1'000'000
     };
 
-    print_table_header("Low exchange workload (parallel sum by chunks)");
+    std::vector<std::pair<std::size_t, BenchmarkResult>> low_results;
+    print_table_header("LOW EXCHANGE: parallel sum by chunks");
     for (std::size_t n : low_exchange_sizes) {
-        const auto result = run_low_exchange_benchmark(n, thread_count, repeats);
+        auto result = run_low_exchange_benchmark(
+            n, thread_count, warmup_repeats, measured_repeats);
         print_table_row(n, result);
+        low_results.emplace_back(n, std::move(result));
     }
+    print_mean_summary("LOW EXCHANGE", low_results);
 
     const int stages = 8;
 
-    print_table_header("High exchange workload (pipeline with vector passing)");
+    std::vector<std::pair<std::size_t, BenchmarkResult>> high_results;
+    print_table_header("HIGH EXCHANGE: pipeline with vector passing");
     for (std::size_t n : high_exchange_sizes) {
-        const auto result = run_high_exchange_benchmark(n, stages, repeats);
+        auto result = run_high_exchange_benchmark(
+            n, stages, warmup_repeats, measured_repeats);
         print_table_row(n, result);
+        high_results.emplace_back(n, std::move(result));
     }
+    print_mean_summary("HIGH EXCHANGE", high_results);
 
     std::cout << "\nThreads used: " << thread_count << "\n";
-    std::cout << "Repeats: " << repeats << "\n";
+    std::cout << "Warmup repeats: " << warmup_repeats << "\n";
+    std::cout << "Measured repeats: " << measured_repeats << "\n";
     std::cout << "Pipeline stages: " << stages << "\n";
 
     return 0;

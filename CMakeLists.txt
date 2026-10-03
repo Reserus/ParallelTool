@@ -50,6 +50,14 @@ add_executable(example_benchmark
     examples/benchmark_overhead.cpp
 )
 
+add_executable(example_benchmark_shared_vs_copy
+    examples/benchmark_copy_vs_shared.cpp
+)
+
+add_executable(example_shared
+    examples/shared_example.cpp
+)
+
 add_executable(example_benchmark_table
     examples/benchmark_table.cpp
 )
@@ -85,6 +93,16 @@ target_link_libraries(example_benchmark
 )
 
 target_link_libraries(example_benchmark_table
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_shared
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_benchmark_shared_vs_copy
     PRIVATE
         parallel_tools
 )

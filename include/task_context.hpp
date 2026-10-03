@@ -1,6 +1,8 @@
 #pragma once
 
+#include <memory>
 #include <mutex>
+#include <utility>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -20,7 +22,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, Value> data_;
+    std::unordered_map<std::string, std::shared_ptr<const Value>> data_;
 
 public:
     TaskContext() = default;
@@ -36,8 +38,9 @@ public:
             "TaskContext::set: unsupported type"
         );
 
+        auto stored = std::make_shared<const Value>(std::move(value));
         std::lock_guard<std::mutex> lock(mutex_);
-        data_[key] = std::move(value);
+        data_[key] = std::move(stored);
     }
 
     template <class T>
@@ -58,12 +61,41 @@ public:
             throw std::runtime_error("TaskContext: key not found: " + key);
         }
 
-        const T* ptr = std::get_if<T>(&it->second);
+        const T* ptr = std::get_if<T>(it->second.get());
         if (!ptr) {
             throw std::runtime_error("TaskContext: bad type for key: " + key);
         }
 
         return *ptr;
+    }
+
+    template <class T>
+    std::shared_ptr<const T> get_shared(const std::string& key) const {
+        static_assert(
+            std::is_same_v<T, int> ||
+            std::is_same_v<T, double> ||
+            std::is_same_v<T, std::string> ||
+            std::is_same_v<T, std::vector<int>> ||
+            std::is_same_v<T, std::vector<double>>,
+            "TaskContext::get_shared: unsupported type"
+        );
+
+        std::shared_ptr<const Value> owner;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = data_.find(key);
+            if (it == data_.end()) {
+                throw std::runtime_error("TaskContext: key not found: " + key);
+            }
+            owner = it->second;
+        }
+
+        const T* ptr = std::get_if<T>(owner.get());
+        if (!ptr) {
+            throw std::runtime_error("TaskContext: bad type for key: " + key);
+        }
+        
+        return std::shared_ptr<const T>(owner, ptr);
     }
 
     Value get_value_copy(const std::string& key) const {
@@ -74,12 +106,13 @@ public:
             throw std::runtime_error("TaskContext: key not found: " + key);
         }
 
-        return it->second;
+        return *it->second;
     }
 
     void set_value(const std::string& key, Value value) {
+        auto stored = std::make_shared<const Value>(std::move(value));
         std::lock_guard<std::mutex> lock(mutex_);
-        data_[key] = std::move(value);
+        data_[key] = std::move(stored);
     }
 
     template <class T>
