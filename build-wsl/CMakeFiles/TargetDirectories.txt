@@ -1,0 +1,14 @@
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/parallel_tools.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_basic.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_failure.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_root_fail.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_serialization.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_mpi_transport.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_benchmark.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_benchmark_shared_vs_copy.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_shared.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_benchmark_table.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_read_write.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/example_benchmark_table_read_write.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/edit_cache.dir
+/home/reserus/ParallelTools/build-wsl/CMakeFiles/rebuild_cache.dir

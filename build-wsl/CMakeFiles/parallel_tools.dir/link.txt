@@ -1,0 +1,2 @@
+/usr/bin/ar qc libparallel_tools.a CMakeFiles/parallel_tools.dir/src/threads_driver.cpp.o CMakeFiles/parallel_tools.dir/src/mpi_driver.cpp.o
+/usr/bin/ranlib libparallel_tools.a

@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/example_read_write.dir/examples/read_write_example.cpp.o -o example_read_write  -Wl,-rpath,/usr/lib/x86_64-linux-gnu/openmpi/lib libparallel_tools.a /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so 

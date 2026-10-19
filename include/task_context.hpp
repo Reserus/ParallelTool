@@ -109,6 +109,29 @@ public:
         return *it->second;
     }
 
+    std::shared_ptr<const Value> get_value_shared(const std::string& key) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = data_.find(key);
+        if (it == data_.end()) {
+            throw std::runtime_error("TaskContext: key not found: " + key);
+        }
+        return it->second;
+    }
+
+    void publish(std::unordered_map<std::string, Value> values) {
+        std::unordered_map<std::string, std::shared_ptr<const Value>> stored;
+        stored.reserve(values.size());
+        for (auto& [key, value] : values) {
+            stored.emplace(std::move(key), std::make_shared<const Value>(std::move(value)));
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [key, value] : stored) {
+            data_[std::move(key)] = std::move(value);
+        }
+    }
+
     void set_value(const std::string& key, Value value) {
         auto stored = std::make_shared<const Value>(std::move(value));
         std::lock_guard<std::mutex> lock(mutex_);

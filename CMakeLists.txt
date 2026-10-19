@@ -62,6 +62,14 @@ add_executable(example_benchmark_table
     examples/benchmark_table.cpp
 )
 
+add_executable(example_read_write
+    examples/read_write_example.cpp
+)
+
+add_executable(example_benchmark_table_read_write
+    examples/benchmark_table_read_write.cpp
+)
+
 target_link_libraries(example_basic
     PRIVATE
         parallel_tools
@@ -103,6 +111,16 @@ target_link_libraries(example_shared
 )
 
 target_link_libraries(example_benchmark_shared_vs_copy
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_read_write
+    PRIVATE
+        parallel_tools
+)
+
+target_link_libraries(example_benchmark_table_read_write
     PRIVATE
         parallel_tools
 )

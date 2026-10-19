@@ -194,7 +194,13 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
                 }
 
                 try {
-                    graph.task(id).func(context);
+                    if (graph.task(id).access_func) {
+                        TaskAccess access(context, graph.task(id).access_spec);
+                        graph.task(id).access_func(access);
+                        access.commit();
+                    } else {
+                        graph.task(id).func(context);
+                    }
                     states[id].store(TaskState::Finished);
 
                     if (!failed.load()) {
@@ -215,7 +221,15 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
                         }
                     }
 
-                    cancel_subtree(id);
+                    for (std::size_t i = 0; i < graph.size(); ++i) {
+                        TaskState current = states[i].load();
+                        while (current == TaskState::Pending || current == TaskState::Queued) {
+                            if (states[i].compare_exchange_weak(current, TaskState::Skipped)) {
+                                mark_settled();
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 mark_settled();
@@ -231,7 +245,15 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
                 }
             }
 
-            cancel_subtree(id);
+            for (std::size_t i = 0; i < graph.size(); ++i) {
+                TaskState current = states[i].load();
+                while (current == TaskState::Pending || current == TaskState::Queued) {
+                    if (states[i].compare_exchange_weak(current, TaskState::Skipped)) {
+                        mark_settled();
+                        break;
+                    }
+                }
+            }
             mark_settled();
         }
     };
