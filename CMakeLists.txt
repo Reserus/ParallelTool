@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(ParallelTools LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -124,3 +126,14 @@ target_link_libraries(example_benchmark_table_read_write
     PRIVATE
         parallel_tools
 )
+
+add_executable(scheduler_tests
+    tests/scheduler_tests.cpp
+)
+
+target_link_libraries(scheduler_tests
+    PRIVATE
+        parallel_tools
+)
+
+add_test(NAME scheduler_tests COMMAND scheduler_tests)

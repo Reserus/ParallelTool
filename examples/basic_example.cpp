@@ -1,6 +1,5 @@
 #include "executor.hpp"
 #include "threads_driver.hpp"
-// #include "mpi_driver.hpp"
 
 #include <iostream>
 #include <vector>
@@ -75,7 +74,6 @@ int main() {
     graph.add_dependency(compute_max, print);
 
     ThreadsDriver driver(4);
-    // MpiDriver driver;
 
     Executor executor(driver);
 

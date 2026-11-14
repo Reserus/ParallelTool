@@ -5,6 +5,9 @@
 #include <queue>
 #include <stdexcept>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <algorithm>
 
 ThreadsDriver::ThreadPool::ThreadPool(std::size_t thread_count)
     : stop_(false) {
@@ -70,12 +73,74 @@ ThreadsDriver::ThreadsDriver(std::size_t thread_count)
 
 ThreadsDriver::~ThreadsDriver() = default;
 
-bool ThreadsDriver::is_acyclic(const TaskGraph& graph) const {
+void ThreadsDriver::validate_graph(
+    const TaskGraph& graph,
+    const TaskContext& context,
+    std::vector<std::vector<TaskGraph::TaskId>>& next,
+    std::vector<std::vector<TaskGraph::TaskId>>& prev) const {
     const std::size_t n = graph.size();
+    next.assign(n, {});
+    prev.assign(n, {});
+
+    std::unordered_map<std::string, TaskGraph::TaskId> producers;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& node = graph.task(i);
+        std::unordered_set<std::string> outputs;
+        outputs.insert(node.outputs.begin(), node.outputs.end());
+        for (const auto& key : outputs) {
+            if (!producers.emplace(key, i).second) {
+                throw std::runtime_error("ThreadsDriver: duplicate producer for key: " + key);
+            }
+            if (context.contains(key)) {
+                throw std::runtime_error("ThreadsDriver: task output overwrites initial key: " + key);
+            }
+        }
+
+        for (const auto& access : node.access_spec.read_writes) {
+            if (access.first == access.second) {
+                throw std::runtime_error("ThreadsDriver: read/write input and output must differ: " + access.first);
+            }
+        }
+    }
+
+    auto add_edge = [&](TaskGraph::TaskId from, TaskGraph::TaskId to) {
+        if (from == to) {
+            throw std::runtime_error("ThreadsDriver: task depends on itself");
+        }
+        if (std::find(next[from].begin(), next[from].end(), to) == next[from].end()) {
+            next[from].push_back(to);
+            prev[to].push_back(from);
+        }
+    };
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (auto to : graph.task(i).next) {
+            add_edge(i, to);
+        }
+    }
+
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& node = graph.task(i);
+        std::unordered_set<std::string> inputs(node.inputs.begin(), node.inputs.end());
+        for (const auto& access : node.access_spec.read_writes) {
+            inputs.insert(access.first);
+        }
+        for (const auto& key : inputs) {
+            const auto producer = producers.find(key);
+            if (producer == producers.end()) {
+                if (!context.contains(key)) {
+                    throw std::runtime_error("ThreadsDriver: missing input: " + key);
+                }
+            } else {
+                add_edge(producer->second, i);
+            }
+        }
+    }
+
     std::vector<int> indegree(n, 0);
 
     for (std::size_t i = 0; i < n; ++i) {
-        indegree[i] = static_cast<int>(graph.task(i).prev.size());
+        indegree[i] = static_cast<int>(prev[i].size());
     }
 
     std::queue<TaskGraph::TaskId> q;
@@ -92,7 +157,7 @@ bool ThreadsDriver::is_acyclic(const TaskGraph& graph) const {
         q.pop();
         ++visited;
 
-        for (auto to : graph.task(v).next) {
+        for (auto to : next[v]) {
             --indegree[to];
             if (indegree[to] == 0) {
                 q.push(to);
@@ -100,7 +165,9 @@ bool ThreadsDriver::is_acyclic(const TaskGraph& graph) const {
         }
     }
 
-    return visited == n;
+    if (visited != n) {
+        throw std::runtime_error("ThreadsDriver: task graph contains a cycle");
+    }
 }
 
 void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
@@ -108,9 +175,9 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
         return;
     }
 
-    if (!is_acyclic(graph)) {
-        throw std::runtime_error("ThreadsDriver: task graph contains a cycle");
-    }
+    std::vector<std::vector<TaskGraph::TaskId>> next;
+    std::vector<std::vector<TaskGraph::TaskId>> prev;
+    validate_graph(graph, context, next, prev);
 
     enum class TaskState {
         Pending,
@@ -123,7 +190,7 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
 
     std::vector<std::atomic<int>> remaining_deps(graph.size());
     for (std::size_t i = 0; i < graph.size(); ++i) {
-        remaining_deps[i].store(static_cast<int>(graph.task(i).prev.size()));
+        remaining_deps[i].store(static_cast<int>(prev[i].size()));
     }
 
     std::vector<std::atomic<TaskState>> states(graph.size());
@@ -152,20 +219,21 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
     std::function<void(TaskGraph::TaskId)> schedule_task;
 
     cancel_subtree = [&](TaskGraph::TaskId id) {
-        for (auto nxt : graph.task(id).next) {
+        for (auto nxt : next[id]) {
             TaskState current = states[nxt].load();
 
             while (true) {
                 if (current == TaskState::Pending || current == TaskState::Queued) {
                     if (states[nxt].compare_exchange_weak(current, TaskState::Skipped)) {
-                        mark_settled();
+                        if (current == TaskState::Pending) {
+                            mark_settled();
+                        }
                         cancel_subtree(nxt);
                         break;
                     }
                     continue;
                 }
 
-                // Уже в работе или уже завершена/пропущена/упала
                 break;
             }
         }
@@ -181,15 +249,14 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
             pool_.submit([&, id]() {
                 TaskState expected_state = TaskState::Queued;
 
-                // Если граф уже сломан до старта этой задачи
                 if (failed.load()) {
-                    if (states[id].compare_exchange_strong(expected_state, TaskState::Skipped)) {
-                        mark_settled();
-                    }
+                    states[id].compare_exchange_strong(expected_state, TaskState::Skipped);
+                    mark_settled();
                     return;
                 }
 
                 if (!states[id].compare_exchange_strong(expected_state, TaskState::Running)) {
+                    mark_settled();
                     return;
                 }
 
@@ -204,7 +271,7 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
                     states[id].store(TaskState::Finished);
 
                     if (!failed.load()) {
-                        for (auto nxt : graph.task(id).next) {
+                        for (auto nxt : next[id]) {
                             if (--remaining_deps[nxt] == 0) {
                                 schedule_task(nxt);
                             }
@@ -225,7 +292,9 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
                         TaskState current = states[i].load();
                         while (current == TaskState::Pending || current == TaskState::Queued) {
                             if (states[i].compare_exchange_weak(current, TaskState::Skipped)) {
-                                mark_settled();
+                                if (current == TaskState::Pending) {
+                                    mark_settled();
+                                }
                                 break;
                             }
                         }
@@ -247,10 +316,12 @@ void ThreadsDriver::run(TaskGraph& graph, TaskContext& context) {
 
             for (std::size_t i = 0; i < graph.size(); ++i) {
                 TaskState current = states[i].load();
-                while (current == TaskState::Pending || current == TaskState::Queued) {
-                    if (states[i].compare_exchange_weak(current, TaskState::Skipped)) {
+            while (current == TaskState::Pending || current == TaskState::Queued) {
+                if (states[i].compare_exchange_weak(current, TaskState::Skipped)) {
+                    if (current == TaskState::Pending) {
                         mark_settled();
-                        break;
+                    }
+                    break;
                     }
                 }
             }

@@ -127,9 +127,11 @@ public:
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
+        auto replacement = data_;
         for (auto& [key, value] : stored) {
-            data_[std::move(key)] = std::move(value);
+            replacement[std::move(key)] = std::move(value);
         }
+        data_.swap(replacement);
     }
 
     void set_value(const std::string& key, Value value) {

@@ -51,10 +51,6 @@ int main() {
         }
     );
 
-    graph.add_dependency(load, double_numbers);
-    graph.add_dependency(double_numbers, sum);
-    graph.add_dependency(double_numbers, failing);
-
     ThreadsDriver driver(4);
     Executor executor(driver);
 

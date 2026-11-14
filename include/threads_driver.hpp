@@ -8,6 +8,7 @@
 #include <queue>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 class ThreadsDriver final : public IExecutionDriver {
     class ThreadPool {
@@ -29,7 +30,11 @@ class ThreadsDriver final : public IExecutionDriver {
     };
 
 private:
-    bool is_acyclic(const TaskGraph& graph) const;
+    void validate_graph(
+        const TaskGraph& graph,
+        const TaskContext& context,
+        std::vector<std::vector<TaskGraph::TaskId>>& next,
+        std::vector<std::vector<TaskGraph::TaskId>>& prev) const;
 
 private:
     ThreadPool pool_;

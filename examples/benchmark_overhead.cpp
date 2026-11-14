@@ -271,16 +271,12 @@ int main() {
 
     const int repeats = 5;
 
-    // 1) Минимальный обмен: одна большая структура данных,
-    //    параллельная обработка по кускам, потом редукция.
     const auto low_exchange = run_low_exchange_benchmark(
         2'000'000,
         thread_count,
         repeats
     );
 
-    // 2) Интенсивный обмен: несколько стадий, на каждой стадии
-    //    передаётся новый vector<double>.
     const auto high_exchange = run_high_exchange_benchmark(
         500'000,
         8,

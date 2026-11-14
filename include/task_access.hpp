@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
 struct TaskAccessSpec {
     std::vector<std::string> reads;
@@ -78,6 +79,11 @@ private:
     friend class ThreadsDriver;
 
     void commit() {
+        for (const auto& key : writable_) {
+            if (!staged_.contains(key)) {
+                throw std::runtime_error("TaskAccess: declared output was not written: " + key);
+            }
+        }
         context_.publish(std::move(staged_));
     }
 
